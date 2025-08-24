@@ -380,17 +380,73 @@ class CloudPlatformAdvisor:
         
         return best_category, self.cloud_services[best_category]
 
-    def get_recommendation(self, data: Dict) -> Dict:
-        """Get the best recommendation based on scores."""
-        sorted_providers = sorted(data.items(), key=lambda x: x[1]['score'], reverse=True)
+    def get_recommendation(self, data: Dict, weights: Dict = None) -> Dict:
+        """Get the best recommendation based on scores and user priorities."""
+        if weights is None:
+            weights = {'cost': 1, 'performance': 1, 'ai_ml': 1}
+        
+        # Calculate weighted scores
+        weighted_data = {}
+        for provider, info in data.items():
+            base_score = info['score']
+            
+            # Apply weights based on provider strengths
+            cost_multiplier = self.get_cost_multiplier(provider)
+            performance_multiplier = self.get_performance_multiplier(provider)
+            ai_ml_multiplier = self.get_ai_ml_multiplier(provider)
+            
+            weighted_score = (
+                base_score * 0.4 +  # Base functionality score (40%)
+                cost_multiplier * weights['cost'] * 2 +  # Cost factor (20% max)
+                performance_multiplier * weights['performance'] * 2 +  # Performance factor (20% max)
+                ai_ml_multiplier * weights['ai_ml'] * 2  # AI/ML factor (20% max)
+            )
+            
+            weighted_data[provider] = {
+                **info,
+                'weighted_score': weighted_score,
+                'cost_score': cost_multiplier,
+                'performance_score': performance_multiplier,
+                'ai_ml_score': ai_ml_multiplier
+            }
+        
+        sorted_providers = sorted(weighted_data.items(), key=lambda x: x[1]['weighted_score'], reverse=True)
         winner = sorted_providers[0]
         
         return {
             'provider': winner[0],
             'score': winner[1]['score'],
+            'weighted_score': winner[1]['weighted_score'],
             'reason': winner[1]['best_for'],
             'details': winner[1]
         }
+    
+    def get_cost_multiplier(self, provider: str) -> float:
+        """Get cost effectiveness score for each provider (higher = more cost effective)."""
+        cost_scores = {
+            'AWS': 3.5,  # Moderate pricing, but complex
+            'Google Cloud': 4.5,  # Generally more cost-effective
+            'Microsoft Azure': 3.0  # Generally more expensive
+        }
+        return cost_scores.get(provider, 3.0)
+    
+    def get_performance_multiplier(self, provider: str) -> float:
+        """Get performance score for each provider."""
+        performance_scores = {
+            'AWS': 4.5,  # Industry leader in performance
+            'Google Cloud': 4.2,  # Strong performance, especially for data
+            'Microsoft Azure': 3.8  # Good performance, enterprise-focused
+        }
+        return performance_scores.get(provider, 4.0)
+    
+    def get_ai_ml_multiplier(self, provider: str) -> float:
+        """Get AI/ML capabilities score for each provider."""
+        ai_ml_scores = {
+            'AWS': 4.5,  # Comprehensive AI/ML services
+            'Google Cloud': 4.8,  # Leading in AI/ML innovation
+            'Microsoft Azure': 4.0  # Good AI/ML services, growing
+        }
+        return ai_ml_scores.get(provider, 4.0)
 
     def create_comparison_dataframe(self, data: Dict) -> pd.DataFrame:
         """Create a DataFrame for easy comparison display."""
@@ -408,25 +464,78 @@ class CloudPlatformAdvisor:
         
         return pd.DataFrame(comparison_data).sort_values('Score', ascending=False)
 
-    def create_score_chart(self, data: Dict) -> go.Figure:
+    def create_score_chart(self, data: Dict, weights: Dict = None) -> go.Figure:
         """Create a bar chart comparing scores."""
         providers = list(data.keys())
-        scores = [data[provider]['score'] for provider in providers]
-        colors = ['#1f77b4' if provider == 'AWS' else '#ff7f0e' if provider == 'Google Cloud' else '#2ca02c' 
-                  for provider in providers]
+        base_scores = [data[provider]['score'] for provider in providers]
         
-        fig = go.Figure(data=[
-            go.Bar(x=providers, y=scores, marker_color=colors, text=scores, textposition='auto')
-        ])
-        
-        fig.update_layout(
-            title="Platform Comparison Scores",
-            xaxis_title="Cloud Provider",
-            yaxis_title="Score (out of 10)",
-            yaxis=dict(range=[0, 10]),
-            height=400,
-            template="plotly_white"
-        )
+        if weights:
+            # Calculate weighted scores for comparison
+            weighted_scores = []
+            for provider in providers:
+                cost_mult = self.get_cost_multiplier(provider)
+                perf_mult = self.get_performance_multiplier(provider)
+                ai_mult = self.get_ai_ml_multiplier(provider)
+                
+                weighted_score = (
+                    data[provider]['score'] * 0.4 +
+                    cost_mult * weights['cost'] * 2 +
+                    perf_mult * weights['performance'] * 2 +
+                    ai_mult * weights['ai_ml'] * 2
+                )
+                weighted_scores.append(round(weighted_score, 1))
+            
+            colors = ['#28a745' if provider == 'AWS' else '#17a2b8' if provider == 'Google Cloud' else '#6f42c1' 
+                      for provider in providers]
+            
+            fig = go.Figure()
+            
+            # Base scores
+            fig.add_trace(go.Bar(
+                x=providers, 
+                y=base_scores, 
+                name='Base Score',
+                marker_color='lightgray',
+                opacity=0.6,
+                text=[f"{score}" for score in base_scores],
+                textposition='auto'
+            ))
+            
+            # Weighted scores
+            fig.add_trace(go.Bar(
+                x=providers, 
+                y=weighted_scores, 
+                name='Weighted Score',
+                marker_color=colors,
+                text=[f"{score}" for score in weighted_scores],
+                textposition='auto'
+            ))
+            
+            fig.update_layout(
+                title="Platform Comparison: Base vs Weighted Scores",
+                xaxis_title="Cloud Provider",
+                yaxis_title="Score",
+                yaxis=dict(range=[0, max(max(base_scores), max(weighted_scores)) + 1]),
+                height=400,
+                template="plotly_white",
+                barmode='group'
+            )
+        else:
+            colors = ['#28a745' if provider == 'AWS' else '#17a2b8' if provider == 'Google Cloud' else '#6f42c1' 
+                      for provider in providers]
+            
+            fig = go.Figure(data=[
+                go.Bar(x=providers, y=base_scores, marker_color=colors, text=base_scores, textposition='auto')
+            ])
+            
+            fig.update_layout(
+                title="Platform Comparison Scores",
+                xaxis_title="Cloud Provider",
+                yaxis_title="Score (out of 10)",
+                yaxis=dict(range=[0, 10]),
+                height=400,
+                template="plotly_white"
+            )
         
         return fig
 
@@ -448,20 +557,18 @@ def main():
     # Input section
     st.subheader("📝 Describe Your Requirement")
     
-    col1, col2 = st.columns([3, 1])
+    # Main input area
+    user_input = st.text_area(
+        "What do you need to build or deploy?",
+        placeholder="e.g., I need to train a machine learning model for image recognition, or I want to build a real-time dashboard for monitoring user activity...",
+        height=150,
+        help="Describe your project in natural language. Be specific about your requirements, expected scale, and any special needs."
+    )
+    
+    # Create two columns - left for examples, right for priorities
+    col1, col2 = st.columns([1, 1])
     
     with col1:
-        user_input = st.text_area(
-            "What do you need to build or deploy?",
-            placeholder="e.g., I need to train a machine learning model for image recognition, or I want to build a real-time dashboard for monitoring user activity...",
-            height=100,
-            help="Describe your project in natural language. Be specific about your requirements, expected scale, and any special needs."
-        )
-    
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
-        analyze_button = st.button("🔍 Get Recommendations", type="primary", use_container_width=True)
-        
         st.markdown("**💡 Try these examples:**")
         example_buttons = [
             "Train deep learning models",
@@ -475,6 +582,57 @@ def main():
             if st.button(f"📋 {example}", key=f"example_{example}", use_container_width=True):
                 st.session_state.example_input = example
                 st.experimental_rerun()
+    
+    with col2:
+        st.markdown("**⚖️ Set Your Priorities:**")
+        st.markdown("*Adjust what factors are most important for your project*")
+        
+        cost_sensitivity = st.slider(
+            "💰 Cost sensitivity (0 = not important, 5 = very important)",
+            min_value=0,
+            max_value=5,
+            value=st.session_state.get('cost_slider', 3),
+            key="cost_slider",
+            help="How important is cost optimization for your project?"
+        )
+        
+        performance_need = st.slider(
+            "⚡ Performance need",
+            min_value=0,
+            max_value=5,
+            value=st.session_state.get('performance_slider', 3),
+            key="performance_slider",
+            help="How critical is high performance and low latency?"
+        )
+        
+        ai_ml_features = st.slider(
+            "🤖 AI/ML features",
+            min_value=0,
+            max_value=5,
+            value=st.session_state.get('ai_ml_slider', 3),
+            key="ai_ml_slider",
+            help="How important are advanced AI/ML capabilities?"
+        )
+
+    # Display current priorities
+    if any([cost_sensitivity != 3, performance_need != 3, ai_ml_features != 3]):
+        priority_summary = []
+        if cost_sensitivity >= 4:
+            priority_summary.append("Cost-conscious")
+        if performance_need >= 4:
+            priority_summary.append("Performance-critical")
+        if ai_ml_features >= 4:
+            priority_summary.append("AI/ML-focused")
+        
+        if priority_summary:
+            st.info(f"🎯 **Your priorities:** {', '.join(priority_summary)}")
+
+    # Action buttons
+    button_col1, button_col2 = st.columns(2)
+    with button_col1:
+        analyze_button = st.button("🔍 Get Recommendations", type="primary", use_container_width=True)
+    with button_col2:
+        compare_button = st.button("📊 Compare Clouds", type="secondary", use_container_width=True)
 
     # Handle example button clicks
     if 'example_input' in st.session_state:
@@ -483,18 +641,26 @@ def main():
         analyze_button = True
 
     # Analysis section
-    if analyze_button and user_input.strip():
+    if (analyze_button or compare_button) and user_input.strip():
+        # Get user priorities
+        weights = {
+            'cost': cost_sensitivity,
+            'performance': performance_need,
+            'ai_ml': ai_ml_features
+        }
+        
         with st.spinner('🔄 Analyzing your requirements...'):
             time.sleep(1)  # Simulate processing time
             category, data = advisor.analyze_requirement(user_input)
-            recommendation = advisor.get_recommendation(data)
+            recommendation = advisor.get_recommendation(data, weights)
             
             # Store results in session state
             st.session_state.analysis_results = {
                 'category': category,
                 'data': data,
                 'recommendation': recommendation,
-                'user_input': user_input
+                'user_input': user_input,
+                'weights': weights
             }
 
     # Display results
@@ -504,29 +670,42 @@ def main():
         data = results['data']
         recommendation = results['recommendation']
         user_input = results['user_input']
+        weights = results.get('weights', {'cost': 3, 'performance': 3, 'ai_ml': 3})
         
         # Results header
         st.markdown("---")
         st.subheader("📊 Analysis Results")
         
+        # Show recommended cloud in a prominent box
+        st.markdown(f"""
+        <div class="recommendation-box">
+            <h3>✅ Recommended Cloud: {recommendation['provider']}</h3>
+            <p><strong>Base Score:</strong> {recommendation['score']}/10 | <strong>Weighted Score:</strong> {recommendation['weighted_score']:.1f}</p>
+            <p><strong>Best for:</strong> {recommendation['reason']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
         col1, col2 = st.columns([2, 1])
         with col1:
             st.info(f"**Your requirement:** {user_input}")
             st.info(f"**Detected category:** {category.replace('_', ' ').title()}")
+            
+            # Show applied priorities
+            active_priorities = []
+            if weights['cost'] >= 4:
+                active_priorities.append("Cost-sensitive")
+            if weights['performance'] >= 4:
+                active_priorities.append("Performance-critical")
+            if weights['ai_ml'] >= 4:
+                active_priorities.append("AI/ML-focused")
+            
+            if active_priorities:
+                st.success(f"**Applied priorities:** {', '.join(active_priorities)}")
         
         with col2:
-            # Score chart
-            fig = advisor.create_score_chart(data)
+            # Score chart with weights
+            fig = advisor.create_score_chart(data, weights if any(v != 3 for v in weights.values()) else None)
             st.plotly_chart(fig, use_container_width=True)
-
-        # Recommendation box
-        st.markdown(f"""
-        <div class="recommendation-box">
-            <h3>🏆 Recommended Platform: {recommendation['provider']}</h3>
-            <p><strong>Score:</strong> {recommendation['score']}/10</p>
-            <p><strong>Why:</strong> {recommendation['reason']}</p>
-        </div>
-        """, unsafe_allow_html=True)
 
         # Detailed comparison
         st.subheader("📋 Detailed Comparison")
